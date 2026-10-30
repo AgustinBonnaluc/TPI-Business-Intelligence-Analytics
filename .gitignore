@@ -1,0 +1,20 @@
+# Datos originales del LMS: el repo es público
+data/raw/*
+!data/raw/.gitkeep
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Sistema y Office
+desktop.ini
+Thumbs.db
+~$*
