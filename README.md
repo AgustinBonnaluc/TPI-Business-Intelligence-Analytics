@@ -7,7 +7,7 @@ Dashboard en Streamlit para analizar participación, trazabilidad, rendimiento y
 
 ## Estructura
 
-- `data/raw/`: Excel originales del LMS (no se suben al repo).
+- `data/raw/`: Excel originales del LMS.
 - `data/processed/`: datos limpios que usa la app.
 - `notebooks/`: exploración de datos.
 - `src/`: limpieza, modelado y KPIs.
