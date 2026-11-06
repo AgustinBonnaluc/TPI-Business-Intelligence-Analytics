@@ -18,6 +18,7 @@ Dashboard en Streamlit para analizar participación, trazabilidad, rendimiento y
 
 ```bash
 pip install -r requirements.txt
+python -m src.limpieza   # genera data/processed/ a partir de los Excel en data/raw/
 streamlit run app/streamlit_app.py
 ```
 
