@@ -1,0 +1,25 @@
+{
+  "Álgebra": {
+    "calculo": "suma",
+    "regular_desde": 60,
+    "promocion_desde": 85,
+    "puntos_plan": 120,
+    "instrumentos_plan": 8,
+    "cierre_confirmado": false,
+    "instrumentos_requeridos": []
+  },
+  "Probabilidad y Estadística": {
+    "calculo": "promedio",
+    "regular_desde": 60,
+    "promocion_desde": 85,
+    "cierre_confirmado": false,
+    "instrumentos_requeridos": []
+  },
+  "Algoritmos y Estructuras de Datos": {
+    "calculo": "promedio",
+    "regular_desde": 60,
+    "promocion_desde": 90,
+    "cierre_confirmado": false,
+    "instrumentos_requeridos": []
+  }
+}
