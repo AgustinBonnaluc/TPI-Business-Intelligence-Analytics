@@ -10,6 +10,7 @@ from src.kpis_academicos import (
 
 RAIZ = Path(__file__).resolve().parents[1]
 COLORES = {"Promociona": "#228565", "Regular": "#D49B21", "Libre": "#CE5260", "Sin determinar": "#8492A6"}
+COLORES.update({"En curso": "#147D92", "Sin notas": "#8492A6", "Sin regla": "#8492A6"})
 
 
 def firma_archivos():
@@ -43,7 +44,7 @@ def encabezado(numero, titulo, descripcion):
     st.write(descripcion)
 
 
-def filtros(datos, reglas, base, catalogo, prefijo):
+def filtros(datos, reglas, base, catalogo, prefijo, mostrar_aviso=True):
     materias = sorted(base["materia"].dropna().unique())
     if not materias:
         st.info("Todavía no hay estudiantes o materias para analizar.")
@@ -84,7 +85,8 @@ def filtros(datos, reglas, base, catalogo, prefijo):
         st.info("Esta materia aún no tiene regla académica configurada. Se muestran notas y promedios porcentuales descriptivos, sin condición final.")
     else:
         texto = "Suma de puntos observados" if regla["calculo"] == "suma" else "Promedio de notas observadas"
-        st.info(f"Resultado parcial: {texto.lower()}. Las notas faltantes se conservan; no se completan con cero.")
+        if mostrar_aviso:
+            st.info(f"Resultado parcial: {texto.lower()}. Las notas faltantes se conservan; no se completan con cero.")
         if "puntos_plan" in regla:
             maximo = catalogo.loc[catalogo["materia"].eq(materia), "nota_maxima"].sum()
             cobertura = f"Cobertura de archivos: {maximo:g} de {regla['puntos_plan']:g} puntos del plan"
@@ -125,10 +127,10 @@ def descargar(tabla, nombre, clave):
 
 
 def detalle_estudiantes(resumen, resultado, etiqueta):
-    columnas = ["usuario", "estudiante", "estado", "instrumentos_con_nota", "instrumentos_sin_nota", "cobertura_notas_pct", resultado, "condicion", "motivo_condicion"]
+    columnas = ["usuario", "estudiante", "estado", "instrumentos_con_nota", "instrumentos_sin_nota", "cobertura_notas_pct", resultado, "situacion_provisoria"]
     return resumen[columnas].rename(columns={
         "usuario": "Usuario", "estudiante": "Estudiante", "estado": "Estado de matrícula",
         "instrumentos_con_nota": "Instrumentos con nota", "instrumentos_sin_nota": "Instrumentos sin nota",
         "cobertura_notas_pct": "Cobertura de notas (%)", resultado: etiqueta,
-        "condicion": "Condición final", "motivo_condicion": "Motivo de la condición",
+        "situacion_provisoria": "Situación provisoria",
     })

@@ -8,6 +8,7 @@ RAIZ = Path(__file__).resolve().parents[1]
 CLAVES = ["materia", "usuario"]
 CLAVE_NOTA = CLAVES + ["evaluacion"]
 ESTADOS = ["Promociona", "Regular", "Libre", "Sin determinar"]
+ESTADOS_PROVISORIOS = ["Promociona", "Regular", "Libre", "En curso", "Sin notas", "Sin regla"]
 
 
 def cargar_reglas(ruta=None):
@@ -127,6 +128,7 @@ def resumen_academico(base, notas, reglas, catalogo_completo=None, catalogo_sele
     salida["instrumentos_con_nota"] = agrupadas["nota"].count()
     salida["promedio_instrumentos_pct"] = agrupadas["nota_pct"].mean()
     salida["resultado_parcial"] = np.nan
+    salida["situacion_provisoria"] = "Sin notas"
     salida["condicion"] = "Sin determinar"
     salida["motivo_condicion"] = "Cursada sin cierre académico confirmado"
     seleccion = catalogo_seleccionado if catalogo_seleccionado is not None else catalogo_evaluaciones(notas)
@@ -140,12 +142,27 @@ def resumen_academico(base, notas, reglas, catalogo_completo=None, catalogo_sele
         regla = reglas.get(materia)
         if regla is None:
             salida.loc[mascara, "motivo_condicion"] = "Materia sin regla académica configurada"
+            salida.loc[mascara & salida["instrumentos_con_nota"].gt(0), "situacion_provisoria"] = "Sin regla"
             continue
         if regla["calculo"] == "suma":
             resultado = agrupadas["nota"].sum(min_count=1)
         else:
             resultado = agrupadas["nota"].mean()
         salida.loc[mascara, "resultado_parcial"] = resultado.reindex(salida.index[mascara])
+        observados = mascara & salida["resultado_parcial"].notna()
+        valor = salida.loc[observados, "resultado_parcial"]
+        salida.loc[observados, "situacion_provisoria"] = np.select(
+            [valor.ge(regla["promocion_desde"]), valor.ge(regla["regular_desde"])],
+            ["Promociona", "Regular"], default="Libre",
+        )
+        if regla["calculo"] == "suma":
+            previstos = regla.get("instrumentos_plan") or len(regla.get("instrumentos_requeridos", []))
+            plan_completo = salida["instrumentos_con_nota"].eq(previstos) & salida["instrumentos_seleccionados"].eq(previstos) if previstos else pd.Series(False, index=salida.index)
+            if "puntos_plan" in regla:
+                maximo_disponible = completo.loc[completo["materia"].eq(materia), "nota_maxima"].sum()
+                plan_completo &= bool(np.isclose(maximo_disponible, regla["puntos_plan"]))
+            en_curso = observados & salida["resultado_parcial"].lt(regla["regular_desde"]) & ~plan_completo
+            salida.loc[en_curso, "situacion_provisoria"] = "En curso"
         requeridos = set(regla.get("instrumentos_requeridos", []))
         if not regla.get("cierre_confirmado", False) or not requeridos:
             continue
@@ -179,6 +196,22 @@ def resumen_instrumentos(notas, cantidad_estudiantes):
     tabla["sin_nota"] = cantidad_estudiantes - tabla["con_nota"]
     tabla["cobertura_pct"] = tabla["con_nota"] / cantidad_estudiantes * 100 if cantidad_estudiantes else np.nan
     return tabla
+
+
+def distribucion_resultados(valores, maximo):
+    """Agrupa sin exceder la escala; el último intervalo incluye el máximo."""
+    valores = pd.to_numeric(valores, errors="raise").dropna().to_numpy(dtype=float)
+    if not np.isfinite(maximo) or maximo <= 0:
+        raise ValueError("El máximo de la escala debe ser positivo.")
+    if not np.isfinite(valores).all() or (valores < 0).any() or (valores > maximo).any():
+        raise ValueError("Hay resultados fuera de la escala del gráfico.")
+    limites = np.linspace(0, maximo, 11)
+    cantidades, _ = np.histogram(valores, bins=limites)
+    etiquetas = [
+        f"{inicio:g} a {'<' if i < 9 else ''}{fin:g}"
+        for i, (inicio, fin) in enumerate(zip(limites[:-1], limites[1:]))
+    ]
+    return pd.DataFrame({"Intervalo": etiquetas, "Estudiantes": cantidades})
 
 
 def correlaciones(tabla, x, y):
