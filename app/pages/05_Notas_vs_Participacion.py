@@ -41,7 +41,7 @@ else:
     fig = px.scatter(validos, x=x, y=y, color="instrumentos_con_nota", hover_name="estudiante", hover_data=["usuario", "instrumentos_con_nota", "cobertura_notas_pct"], color_continuous_scale=["#AFD7DD", "#126E83"], labels={x: etiqueta_x, y: etiqueta_y, "instrumentos_con_nota": "Instrumentos con nota", "usuario": "Usuario", "cobertura_notas_pct": "Cobertura (%)"}, opacity=0.75)
     fig.update_traces(marker=dict(size=10, line=dict(width=0.6, color="white")))
     grafico(fig, "relacion_dispersion")
-st.caption("Cada punto representa un estudiante. Diferencias en la cantidad de instrumentos con nota pueden afectar la comparación. Una correlación describe asociación y no demuestra causalidad.")
+st.caption("Diferencias en la cantidad de instrumentos con nota pueden afectar la comparación. Una correlación describe asociación y no demuestra causalidad.")
 
 with st.expander("Detalle estadístico de la relación"):
     a, b = st.columns(2)
@@ -87,7 +87,6 @@ with st.expander("Fuentes y alcance del análisis"):
 - Las notas se cruzan con participación mediante **materia + usuario**, con una fila por estudiante y materia.
 - Tiempo, interacciones y avance provienen del **reporte de participación**. El tiempo reportado no es una estimación de sesiones reconstruidas desde eventos.
 - Los reportes son fotos acumuladas. No se presentan como datos de un período histórico seleccionado ni prueban que la actividad haya ocurrido antes de la nota.
-- El resultado usa los instrumentos elegidos. El promedio porcentual por instrumento es descriptivo y no reemplaza el sistema acumulativo de Álgebra.
-- Pearson mide asociación lineal; Spearman compara los rangos, promediando los empates. Ambos usan exactamente los mismos pares válidos.
+- El resultado usa los instrumentos elegidos. Las notas faltantes no se reemplazan por cero.
 - La ausencia de un reporte queda sin dato. Un cero explícito de actividad se conserva y puede entrar en el grupo exploratorio.
 """)

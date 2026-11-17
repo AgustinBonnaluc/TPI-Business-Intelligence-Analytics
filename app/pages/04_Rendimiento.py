@@ -15,7 +15,7 @@ from src.kpis_academicos import ESTADOS_PROVISORIOS, distribucion_resultados, re
 st.set_page_config(page_title="Rendimiento académico", page_icon="📊", layout="wide")
 encabezado(4, "Rendimiento académico", "Explorá los resultados por instrumento, la cobertura de notas y el avance académico observado.")
 datos, reglas, base, catalogo = cargar()
-materia, regla, notas, resumen, elegidas = filtros(datos, reglas, base, catalogo, "rendimiento")
+materia, regla, notas, resumen, elegidas = filtros(datos, reglas, base, catalogo, "rendimiento", mostrar_aviso=False)
 resultado, etiqueta = medida_resultado(regla)
 
 a, b, c, d = st.columns(4)
@@ -39,19 +39,20 @@ with tab_instrumentos:
         escala = "Puntos originales"
         st.caption("Todos estos instrumentos valen 100 puntos: los puntos y el porcentaje coinciden.")
     else:
-        escala = st.radio("Escala del gráfico", ["Porcentaje del instrumento", "Puntos originales"], horizontal=True)
+        escala = st.radio(
+            "Escala del gráfico", ["Porcentaje del instrumento", "Puntos originales"], horizontal=True,
+            help="El porcentaje permite comparar instrumentos con distintos máximos. Los puntos conservan la escala original de cada evaluación.",
+        )
     y = "promedio_pct" if escala == "Porcentaje del instrumento" else "promedio"
     fig = px.bar(tabla, x="evaluacion", y=y, hover_data=["con_nota", "nota_maxima", "cobertura_pct"], labels={"evaluacion": "Instrumento", y: "Promedio (%)" if y == "promedio_pct" else "Promedio (puntos)", "con_nota": "Estudiantes con nota", "nota_maxima": "Puntos posibles", "cobertura_pct": "Cobertura (%)"})
     grafico(fig, "rendimiento_instrumentos")
-    st.caption("Cada promedio usa las notas registradas, incluidos los ceros explícitos. La cantidad de estudiantes puede variar entre instrumentos; las barras no necesariamente representan al mismo grupo.")
-    if regla and regla["calculo"] == "suma":
-        st.caption("El porcentaje permite comparar instrumentos con distintos máximos. El resultado académico se calcula sumando los puntos originales.")
+    st.caption("La cantidad de estudiantes puede variar entre instrumentos; las barras no necesariamente representan al mismo grupo.")
     nombres = {"evaluacion": "Instrumento", "con_nota": "Con nota", "sin_nota": "Sin nota", "promedio": "Promedio (puntos)", "promedio_pct": "Promedio (%)", "minima": "Mínima", "maxima": "Máxima", "nota_maxima": "Máximo posible", "cobertura_pct": "Cobertura (%)"}
     st.dataframe(tabla.rename(columns=nombres).round(2), hide_index=True, width="stretch")
     descargar(tabla.rename(columns=nombres), "resultados_por_instrumento.csv", "descarga_instrumentos")
 
 with tab_estudiantes:
-    st.caption(f"Esta vista incluye a los {len(resumen)} estudiantes seleccionados. La distribución de notas usa los {con_nota} con resultado registrado; la situación académica y la tabla incluyen también a quienes no tienen notas. Buscar una persona filtra solo la tabla.")
+    st.caption("La distribución usa los resultados con nota. La situación académica y la tabla incluyen también a quienes no tienen notas. Buscar una persona filtra solo la tabla.")
     izquierda, derecha = st.columns(2)
     with izquierda:
         st.subheader("Distribución de resultados parciales")
@@ -78,8 +79,6 @@ with tab_estudiantes:
         fig.update_layout(showlegend=False)
         grafico(fig, "rendimiento_condiciones")
         st.caption("Se calcula con las notas disponibles de los instrumentos seleccionados y se actualiza al incorporar notas. No es una condición final.")
-        if regla and regla["calculo"] == "suma":
-            st.caption("En curso: todavía no alcanza los puntos de regularidad y quedan notas del plan pendientes. Sin notas: no tiene ninguna registrada en la selección.")
     st.subheader("Detalle de estudiantes")
     buscar = st.text_input("Buscar por usuario o nombre", placeholder="Escribí para filtrar esta tabla")
     detalle = detalle_estudiantes(resumen, resultado, etiqueta)

@@ -50,23 +50,35 @@ def filtros(datos, reglas, base, catalogo, prefijo, mostrar_aviso=True):
         st.info("Todavía no hay estudiantes o materias para analizar.")
         st.stop()
     with st.sidebar:
-        st.header("Filtros")
-        materia = st.selectbox("Asignatura", materias, key=f"{prefijo}_materia")
+        titulos = {
+            "rendimiento": "Filtros de rendimiento",
+            "relacion": "Filtros de notas vs. participación",
+        }
+        st.header(titulos.get(prefijo, "Filtros"))
+        materia = st.selectbox("Materia", materias, key=f"{prefijo}_materia")
         por_materia = base[base["materia"].eq(materia)].copy()
-        opciones = ["Matrícula aceptada", "Todos con registros"]
+        opciones = ["Solo inscriptos", "Todos los estudiantes"]
         indice = 0 if por_materia["inscripto"].any() else 1
-        alcance = st.radio("Población", opciones, index=indice, key=f"{prefijo}_poblacion_{materia}")
+        alcance = st.selectbox(
+            "Estudiantes", opciones, index=indice,
+            key=f"{prefijo}_poblacion_{materia}",
+            help="Solo inscriptos incluye matrícula aceptada. Todos incluye a quienes figuran en los datos, tengan o no matrícula aceptada.",
+        )
         if alcance == opciones[0]:
             por_materia = por_materia[por_materia["inscripto"]]
         disponibles = catalogo.loc[catalogo["materia"].eq(materia), "evaluacion"].tolist()
-        elegidas = st.multiselect("Instrumentos", disponibles, default=disponibles, key=f"{prefijo}_evaluaciones_{materia}")
-        st.caption("La población incluye estudiantes sin nota. La ausencia de matrícula o participación no se interpreta como nota cero.")
-        if st.button("Actualizar datos", key=f"{prefijo}_actualizar"):
-            _cargar.clear()
-            st.rerun()
+        with st.expander("Instrumentos"):
+            elegidas = st.multiselect(
+                "Evaluaciones a incluir", disponibles, default=disponibles,
+                key=f"{prefijo}_evaluaciones_{materia}",
+                help="Los indicadores se calculan con estas evaluaciones. Se conservan los estudiantes sin notas registradas.",
+            )
+            if st.button("Actualizar datos", key=f"{prefijo}_actualizar"):
+                _cargar.clear()
+                st.rerun()
     st.caption(f"{materia} · {alcance} · {len(elegidas)} de {len(disponibles)} instrumentos seleccionados")
     if por_materia.empty:
-        st.info("No hay estudiantes en esta población. Podés cambiar el filtro a Todos con registros.")
+        st.info("No hay estudiantes en esta población. Podés cambiar el filtro a Todos los estudiantes.")
         st.stop()
     if not elegidas:
         st.info("Seleccioná al menos un instrumento en el panel lateral. Si no hay opciones, esta materia todavía no tiene calificaciones disponibles.")
