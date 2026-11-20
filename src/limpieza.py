@@ -7,6 +7,10 @@ Lee los Excel de data/raw/ y genera cuatro tablas limpias en data/processed/:
 - trazabilidad.parquet    una fila por evento registrado en el aula
 - calificaciones.parquet  una fila por alumno y evaluación
 
+Cada Excel se reconoce por su contenido (tipo de reporte y materia), no por su
+nombre ni por la carpeta donde está. Por eso las mismas funciones sirven para
+los archivos que se suben desde la app (ver src/carga.py).
+
 Uso, desde la raíz del repo:
 
     python -m src.limpieza
@@ -15,6 +19,7 @@ Uso, desde la raíz del repo:
 import html
 import re
 import unicodedata
+from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
@@ -23,8 +28,7 @@ RAIZ = Path(__file__).resolve().parents[1]
 RAW_DIR = RAIZ / "data" / "raw"
 PROCESSED_DIR = RAIZ / "data" / "processed"
 
-MATERIAS = ["Álgebra", "Probabilidad y Estadística", "Algoritmos y Estructuras de Datos"]
-
+TABLAS = ["matricula", "participacion", "trazabilidad", "calificaciones"]
 
 
 # Bytes 0x80-0x9F que quedaron como caracteres de control: en el original eran
@@ -56,45 +60,75 @@ def _nfc(texto):
     return unicodedata.normalize("NFC", texto)
 
 
-def _carpeta(materia):
-    """Carpeta de una materia en data/raw, sin depender de la forma Unicode del nombre."""
-    for carpeta in RAW_DIR.iterdir():
-        if carpeta.is_dir() and _nfc(carpeta.name) == _nfc(materia):
-            return carpeta
-    raise FileNotFoundError(f"No está la carpeta de '{materia}' en {RAW_DIR}")
+def _excel(contenido, **opciones):
+    return pd.read_excel(BytesIO(contenido), **opciones)
 
 
-def _unico(carpeta, patron):
-    archivos = sorted(carpeta.glob(patron))
-    if len(archivos) != 1:
-        raise FileNotFoundError(f"Se esperaba un archivo '{patron}' en {carpeta} y hay {len(archivos)}")
-    return archivos[0]
+# Identificación del archivo
+
+def _materia_del_aula(aula):
+    """'Aula: TUCD-MD-Álgebra 2025' -> 'Álgebra'."""
+    nombre = aula.split(":", 1)[-1].strip()
+    nombre = re.sub(r"\s+\d{4}$", "", nombre)  # quita el año
+    nombre = nombre.split("-")[-1]  # quita el prefijo de la carrera
+    return _nfc(nombre.strip())
 
 
-def limpiar_matricula():
+def identificar(contenido):
+    """Devuelve (tipo, materia) a partir de las primeras filas del Excel.
+
+    Cada reporte del LMS tiene un encabezado propio:
+    - calificaciones: "Fecha de exportación: ..." y "Calificación: ..." en la columna A
+    - participación: "Reporte de lectura y participación"
+    - trazabilidad: "General - Reporte de Trazabilidad"
+    - padrón de matriculados: "(2319) Álgebra" y debajo las columnas "Alumno", "Identificación"
+    """
+    arriba = _excel(contenido, header=None, nrows=8).astype(str)
+
+    def celda(fila, columna):
+        if fila < arriba.shape[0] and columna < arriba.shape[1]:
+            return arriba.iat[fila, columna].strip()
+        return ""
+
+    if celda(0, 0).startswith("Fecha de exportación:") and celda(2, 0).startswith("Calificación:"):
+        return "calificaciones", _materia_del_aula(celda(1, 0))
+    if celda(0, 0) == "Reporte de lectura y participación":
+        return "participacion", _materia_del_aula(celda(3, 1))
+    if celda(0, 0).endswith("Reporte de Trazabilidad"):
+        return "trazabilidad", _materia_del_aula(celda(3, 1))
+    if celda(1, 0) == "Alumno" and celda(1, 1) == "Identificación":
+        return "matricula", _nfc(re.sub(r"^\(\d+\)\s*", "", celda(0, 0)))
+    raise ValueError(
+        "No se reconoce el archivo: no es un reporte de calificaciones, participación, "
+        "trazabilidad ni un padrón de matriculados del LMS"
+    )
+
+
+# Padrón de matriculados
+
+def _leer_matricula(contenido, nombre, materia):
+    df = _excel(contenido, header=1)
+    df = df[df["Identificación"].notna()]  # quita la fila final "Cantidad de filas:"
+    df = df.rename(columns={
+        "Alumno": "alumno",
+        "Identificación": "usuario",
+        "Comisión": "comision",
+        "Estado Insc.": "estado",
+        "Instancia": "instancia",
+        "Fecha inscripción": "fecha_inscripcion",
+        "Nro de Transacción": "nro_transaccion",
+    })
+    df["materia"] = materia
+    return df
+
+
+def limpiar_matricula(tablas):
     """Una fila por alumno y materia.
 
     El sistema de inscripciones guarda un registro por trámite: hay alumnos con
     una baja y una reinscripción, o con varias bajas. Se toma como vigente la
     última inscripción aceptada; si no hay ninguna, el alumno queda como "Baja".
     """
-    tablas = []
-    for materia in MATERIAS:
-        archivo = next(f for f in (RAW_DIR / "Matriculados").glob("*.xlsx") if _nfc(f.stem) == _nfc(materia))
-        df = pd.read_excel(archivo, header=1)
-        df = df[df["Identificación"].notna()]  # quita la fila final "Cantidad de filas:"
-        df = df.rename(columns={
-            "Alumno": "alumno",
-            "Identificación": "usuario",
-            "Comisión": "comision",
-            "Estado Insc.": "estado",
-            "Instancia": "instancia",
-            "Fecha inscripción": "fecha_inscripcion",
-            "Nro de Transacción": "nro_transaccion",
-        })
-        df["materia"] = materia
-        tablas.append(df)
-
     df = pd.concat(tablas, ignore_index=True)
     df["comision"] = df["comision"].astype(int)
     df["nro_transaccion"] = df["nro_transaccion"].astype(int)
@@ -116,6 +150,7 @@ def limpiar_matricula():
     return vigente[columnas].sort_values(["materia", "usuario"]).reset_index(drop=True)
 
 
+# Reporte de participación
 
 # El encabezado ocupa dos filas (por ejemplo "Foros" arriba y "Cargados" abajo).
 COLUMNAS_PARTICIPACION = [
@@ -139,19 +174,18 @@ def _tiempo_a_minutos(valor):
     return int(horas) * 60 + int(minutos)
 
 
-def limpiar_participacion():
-    """Una fila por usuario y materia. Incluye docentes e invitados (columna `perfil`)."""
-    tablas = []
-    for materia in MATERIAS:
-        archivo = _unico(_carpeta(materia), "reporte_participacion_*.xlsx")
-        df = pd.read_excel(archivo, header=None, skiprows=7)
-        encabezado = pd.read_excel(archivo, header=None, skiprows=5, nrows=1).iloc[0]
-        if df.shape[1] != len(COLUMNAS_PARTICIPACION) or encabezado[0] != "Usuario":
-            raise ValueError(f"Cambió el formato del reporte de participación: {archivo.name}")
-        df.columns = COLUMNAS_PARTICIPACION
-        df["materia"] = materia
-        tablas.append(df)
+def _leer_participacion(contenido, nombre, materia):
+    df = _excel(contenido, header=None, skiprows=7)
+    encabezado = _excel(contenido, header=None, skiprows=5, nrows=1).iloc[0]
+    if df.shape[1] != len(COLUMNAS_PARTICIPACION) or encabezado[0] != "Usuario":
+        raise ValueError(f"Cambió el formato del reporte de participación: {nombre}")
+    df.columns = COLUMNAS_PARTICIPACION
+    df["materia"] = materia
+    return df
 
+
+def limpiar_participacion(tablas):
+    """Una fila por usuario y materia. Incluye docentes e invitados (columna `perfil`)."""
     df = pd.concat(tablas, ignore_index=True)
     df = df.drop(columns=["email", "aula"])  # email viene vacío; aula es la materia
 
@@ -169,9 +203,11 @@ def limpiar_participacion():
         df[col] = df[col].map(limpiar_texto)
 
     primeras = ["materia", "usuario", "apellido", "nombre", "perfil"]
-    return df[primeras + [c for c in df.columns if c not in primeras]]
+    df = df[primeras + [c for c in df.columns if c not in primeras]]
+    return df.sort_values(["materia", "usuario"]).reset_index(drop=True)
 
 
+# Reporte de trazabilidad
 
 # Algunas descripciones nombran a otro usuario, por ejemplo
 # "Visualización de la realización del usuario 'Nombre Apellido' ...".
@@ -197,15 +233,14 @@ def _completar_accion(fila):
     return "Sin dato"
 
 
-def limpiar_trazabilidad():
-    """Una fila por evento del aula, de alumnos y docentes."""
-    tablas = []
-    for materia in MATERIAS:
-        archivo = _unico(_carpeta(materia), "reporte_trazabilidad_*.xlsx")
-        df = pd.read_excel(archivo, header=5)
-        df["materia"] = materia
-        tablas.append(df)
+def _leer_trazabilidad(contenido, nombre, materia):
+    df = _excel(contenido, header=5)
+    df["materia"] = materia
+    return df
 
+
+def limpiar_trazabilidad(tablas):
+    """Una fila por evento del aula, de alumnos y docentes."""
     df = pd.concat(tablas, ignore_index=True)
     # Filas idénticas (mismo usuario, segundo y acción): el LMS registró dos veces el mismo clic
     df = df.drop_duplicates()
@@ -231,6 +266,8 @@ def limpiar_trazabilidad():
     return df[columnas].sort_values(["materia", "fecha", "usuario"]).reset_index(drop=True)
 
 
+# Calificaciones
+
 def _tipo_evaluacion(nombre):
     n = nombre.lower()
     if "recuperatorio" in n:
@@ -246,14 +283,14 @@ def _tipo_evaluacion(nombre):
     return "Otra"
 
 
-def _leer_calificacion(archivo, materia):
-    cabecera = pd.read_excel(archivo, header=None, nrows=4)[0].tolist()
+def _leer_calificacion(contenido, nombre, materia):
+    cabecera = _excel(contenido, header=None, nrows=4)[0].tolist()
     exportacion = cabecera[0].split(":", 1)[1].strip()
     evaluacion = limpiar_texto(cabecera[2].split(":", 1)[1])
 
-    df = pd.read_excel(archivo, header=6)
+    df = _excel(contenido, header=6)
     if list(df.columns[:5]) != ["Usuario", "Apellido", "Nombre", "Nota", "Observaciones"]:
-        raise ValueError(f"Cambió el formato del archivo de calificaciones: {archivo.name}")
+        raise ValueError(f"Cambió el formato del archivo de calificaciones: {nombre}")
 
     nota = df["Nota"].astype(str).str.extract(r"^\s*([\d.,]+)\s*/\s*([\d.,]+)\s*$")
     nota = nota.apply(lambda c: pd.to_numeric(c.str.replace(",", "."), errors="coerce"))
@@ -268,38 +305,68 @@ def _leer_calificacion(archivo, materia):
         "nota_pct": (nota[0] / nota[1] * 100).round(2),
         "aprobada": df["Observaciones"].str.strip().str.lower().eq("aprobada"),
         "fecha_exportacion": pd.to_datetime(exportacion, format="%d/%m/%Y %H:%M"),
-        "archivo": archivo.name,
+        "archivo": nombre,
     })
 
 
-def limpiar_calificaciones():
+def limpiar_calificaciones(tablas):
     """Una fila por alumno y evaluación. `nota_pct` lleva todas las notas a escala 0-100."""
-    tablas = [
-        _leer_calificacion(archivo, materia)
-        for materia in MATERIAS
-        for archivo in sorted(_carpeta(materia).glob("calificaciones_alumnos_*.xlsx"))
-    ]
     df = pd.concat(tablas, ignore_index=True)
     sin_nota = df["nota"].isna().sum()
     if sin_nota:
         print(f"  Aviso: {sin_nota} notas no se pudieron leer y quedaron vacías")
-    return df
+    return df.sort_values(["materia", "archivo", "usuario"]).reset_index(drop=True)
+
+
+# Lectura de varios archivos
+
+LECTORES = {
+    "matricula": _leer_matricula,
+    "participacion": _leer_participacion,
+    "trazabilidad": _leer_trazabilidad,
+    "calificaciones": _leer_calificacion,
+}
+
+LIMPIEZA = {
+    "matricula": limpiar_matricula,
+    "participacion": limpiar_participacion,
+    "trazabilidad": limpiar_trazabilidad,
+    "calificaciones": limpiar_calificaciones,
+}
+
+
+def leer_archivo(nombre, contenido):
+    """Identifica un Excel del LMS y lo lee sin limpiar. Devuelve (tipo, materia, tabla)."""
+    tipo, materia = identificar(contenido)
+    return tipo, materia, LECTORES[tipo](contenido, nombre, materia)
+
+
+def limpiar_archivos(archivos):
+    """Limpia una lista de (nombre, contenido) y devuelve las tablas que se pudieron armar."""
+    crudos = {}
+    for nombre, contenido in archivos:
+        tipo, _, tabla = leer_archivo(nombre, contenido)
+        crudos.setdefault(tipo, []).append(tabla)
+    return {tipo: LIMPIEZA[tipo](tablas) for tipo, tablas in crudos.items()}
 
 
 def main():
+    archivos = [
+        (ruta.name, ruta.read_bytes())
+        for ruta in sorted(RAW_DIR.rglob("*.xlsx"))
+        if not ruta.name.startswith("~$")
+    ]
+    tablas = limpiar_archivos(archivos)
+    faltan = [nombre for nombre in TABLAS if nombre not in tablas]
+    if faltan:
+        raise FileNotFoundError(f"No hay archivos de {', '.join(faltan)} en {RAW_DIR}")
+
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-    tablas = {
-        "matricula": limpiar_matricula,
-        "participacion": limpiar_participacion,
-        "trazabilidad": limpiar_trazabilidad,
-        "calificaciones": limpiar_calificaciones,
-    }
-    for nombre, funcion in tablas.items():
-        print(f"Limpiando {nombre}...")
-        df = funcion()
+    for nombre in TABLAS:
+        df = tablas[nombre]
         destino = PROCESSED_DIR / f"{nombre}.parquet"
         df.to_parquet(destino, index=False)
-        print(f"  {len(df):,} filas, {df.shape[1]} columnas -> {destino.relative_to(RAIZ)}")
+        print(f"{nombre}: {len(df):,} filas, {df.shape[1]} columnas -> {destino.relative_to(RAIZ)}")
 
 
 if __name__ == "__main__":

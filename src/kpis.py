@@ -10,32 +10,45 @@ Uso típico desde un tablero:
     resumen = resumen_alumnos(datos, fecha_corte)
 """
 
+import json
 from pathlib import Path
 
 import pandas as pd
 
-PROCESSED_DIR = Path(__file__).resolve().parents[1] / "data" / "processed"
+RAIZ = Path(__file__).resolve().parents[1]
+PROCESSED_DIR = RAIZ / "data" / "processed"
+ACTUALIZADO_DIR = RAIZ / "data" / "actualizado"
+CONFIG_MATERIAS = RAIZ / "config" / "materias.json"
 TABLAS = ["matricula", "participacion", "trazabilidad", "calificaciones"]
 
 MINUTOS_SESION = 30
 DIAS_INACTIVO = 7
 DIAS_ALERTA_ROJA = 14
 DIAS_MARGEN_EVALUACION = 7
-
-NOTA_REGULAR = 60
 NOTA_REGULAR_BAJA = 70
-NOTA_PROMOCION = {
-    "Álgebra": 85,
-    "Probabilidad y Estadística": 85,
-    "Algoritmos y Estructuras de Datos": 90,
-}
 
 ACCIONES_ENTREGA = ["Realizar evaluación", "Finalizar realización"]
 
 
+def carpeta_datos():
+    """data/actualizado/ si se cargaron archivos desde la app; si no, data/processed/."""
+    if (ACTUALIZADO_DIR / "calificaciones.parquet").exists():
+        return ACTUALIZADO_DIR
+    return PROCESSED_DIR
+
+
 def cargar_datos():
-    """Lee las tablas limpias de data/processed/."""
-    return {tabla: pd.read_parquet(PROCESSED_DIR / f"{tabla}.parquet") for tabla in TABLAS}
+    """Lee las tablas limpias (las originales o las actualizadas desde la app)."""
+    carpeta = carpeta_datos()
+    return {tabla: pd.read_parquet(carpeta / f"{tabla}.parquet") for tabla in TABLAS}
+
+
+def reglas_materias():
+    """Cálculo de la nota y umbrales de cada materia, según config/materias.json.
+
+    Para cada materia: `calculo` ("suma" o "promedio"), `regular_desde` y `promocion_desde`.
+    """
+    return json.loads(CONFIG_MATERIAS.read_text(encoding="utf-8"))
 
 
 def dia_de_corte(datos, fecha_corte=None):
@@ -100,6 +113,11 @@ def fechas_evaluaciones(datos):
     La fecha de la evaluación es la primera entrega registrada en la trazabilidad.
     Cuenta para la nota recién una semana después, para no poner un 0 a quien
     todavía estaba dentro del plazo.
+
+    Si la evaluación tiene notas pero ninguna entrega en la trazabilidad (por
+    ejemplo, un archivo de notas cargado desde la app), ya se tomó: cuenta desde
+    que se exportaron las notas, o desde el último día con actividad si se
+    exportaron después.
     """
     trazabilidad = datos["trazabilidad"]
     entregas = trazabilidad[(trazabilidad["perfil"] == "Alumnos") & trazabilidad["accion"].isin(ACCIONES_ENTREGA)]
@@ -114,11 +132,14 @@ def fechas_evaluaciones(datos):
         ["materia", "evaluacion", "tipo_evaluacion", "nota_maxima", "fecha_exportacion"]
     ]
     evaluaciones = evaluaciones.merge(primera_entrega, on=["materia", "evaluacion"], how="left")
-    # Si no hay entregas en la trazabilidad, se usa la fecha en que se exportaron las notas
-    evaluaciones["primera_entrega"] = evaluaciones["primera_entrega"].fillna(evaluaciones["fecha_exportacion"])
     evaluaciones["cuenta_desde"] = (
         evaluaciones["primera_entrega"].dt.normalize() + pd.Timedelta(days=DIAS_MARGEN_EVALUACION)
     )
+
+    sin_entregas = evaluaciones["primera_entrega"].isna()
+    exportada = evaluaciones["fecha_exportacion"].dt.normalize().clip(upper=dia_de_corte(datos))
+    evaluaciones.loc[sin_entregas, "cuenta_desde"] = exportada[sin_entregas]
+    evaluaciones["primera_entrega"] = evaluaciones["primera_entrega"].fillna(evaluaciones["fecha_exportacion"])
     return evaluaciones.drop(columns="fecha_exportacion").reset_index(drop=True)
 
 
@@ -148,30 +169,31 @@ def notas_por_evaluacion(datos, fecha_corte=None):
     return tabla
 
 
-def nota_final(notas):
-    """Nota final de 0 a 100 por alumno y materia, según el esquema de cada materia.
+def nota_final(notas, reglas):
+    """Nota final de 0 a 100 por alumno y materia, según el cálculo de cada materia.
 
-    - Álgebra: puntos obtenidos sobre puntos posibles de lo evaluado hasta ahora.
-    - Probabilidad y Estadística: promedio de todos los exámenes (el recuperatorio es uno más).
-    - Algoritmos y Estructuras de Datos: promedio de las autoevaluaciones.
+    - "suma" (Álgebra): puntos obtenidos sobre puntos posibles de lo evaluado hasta ahora.
+    - "promedio" (el resto): promedio de las notas en escala 0-100. En Probabilidad y
+      Estadística el recuperatorio es un examen más.
     """
-    es_algebra = notas["materia"] == "Álgebra"
+    calculo = notas["materia"].map({materia: regla["calculo"] for materia, regla in reglas.items()})
+    por_suma = calculo.eq("suma")
 
-    puntos = notas[es_algebra].groupby(["materia", "usuario"])[["nota", "nota_maxima"]].sum()
-    algebra = puntos["nota"] / puntos["nota_maxima"] * 100
+    puntos = notas[por_suma].groupby(["materia", "usuario"])[["nota", "nota_maxima"]].sum()
+    sumas = puntos["nota"] / puntos["nota_maxima"] * 100
 
-    promedios = notas[~es_algebra].groupby(["materia", "usuario"])["nota_pct"].mean()
+    promedios = notas[~por_suma].groupby(["materia", "usuario"])["nota_pct"].mean()
 
-    return pd.concat([algebra, promedios]).rename("nota_final")
+    return pd.concat([sumas, promedios]).rename("nota_final")
 
 
-def condicion(materia, nota):
-    """Libre, Regular o Promociona según los umbrales de la consigna."""
-    if pd.isna(nota):
+def condicion(nota, regla):
+    """Libre, Regular o Promociona según los umbrales de la materia."""
+    if pd.isna(nota) or regla is None:
         return None
-    if nota >= NOTA_PROMOCION[materia]:
+    if nota >= regla["promocion_desde"]:
         return "Promociona"
-    if nota >= NOTA_REGULAR:
+    if nota >= regla["regular_desde"]:
         return "Regular"
     return "Libre"
 
@@ -229,7 +251,8 @@ def resumen_alumnos(datos, fecha_corte=None):
     vigentes = evaluaciones_vigentes(datos, dia)
     con_nota = datos["calificaciones"].merge(vigentes[["materia", "evaluacion"]], on=["materia", "evaluacion"])
     resumen["evaluaciones_rendidas"] = con_nota.groupby(claves).size()
-    resumen["nota_final"] = nota_final(notas_por_evaluacion(datos, dia))
+    reglas = reglas_materias()
+    resumen["nota_final"] = nota_final(notas_por_evaluacion(datos, dia), reglas)
 
     resumen = resumen.reset_index()
     enteros = ["eventos", "sesiones", "evaluaciones_rendidas"]
@@ -242,7 +265,7 @@ def resumen_alumnos(datos, fecha_corte=None):
 
     resumen["dias_sin_acceso"] = (dia - resumen["ultimo_acceso"].dt.normalize()).dt.days.astype("Int64")
     resumen["activo"] = resumen["dias_sin_acceso"].le(DIAS_INACTIVO).fillna(False).astype(bool)
-    resumen["condicion"] = [condicion(m, n) for m, n in zip(resumen["materia"], resumen["nota_final"])]
+    resumen["condicion"] = [condicion(n, reglas.get(m)) for m, n in zip(resumen["materia"], resumen["nota_final"])]
 
     inscriptos = resumen["inscripto"]
     resumen["nivel_participacion"] = nivel_participacion(
