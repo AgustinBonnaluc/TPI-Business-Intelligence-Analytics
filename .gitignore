@@ -20,3 +20,5 @@ Thumbs.db
 ~$*
 
 enunciado/*
+# Datos cargados desde la app (se pierden al reiniciarla)
+data/actualizado/

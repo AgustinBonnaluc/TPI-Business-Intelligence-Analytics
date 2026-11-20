@@ -38,6 +38,7 @@ for archivo in (
     "05_Notas_vs_Participacion.py",
     "06_Individual.py",
     "07_Matricula_Alertas.py",
+    "08_Cargar_Datos.py",
 ):
     paginas.append(st.Page(f"pages/{archivo}"))
 
